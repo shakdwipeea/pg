@@ -79,7 +79,6 @@ export function loadEdgeTexture(scene: Scene) {
 
   // Create a float array with RGB values for each point (edge start and end)
   const textureSize = flattened.length;
-
   const floatData = new Float32Array(textureSize * 4); // RGBA format
 
   // Fill the texture data
@@ -241,6 +240,7 @@ export function createDirectEdgeShader(
       
       // Output edge with transparency
       gl_FragColor = vec4(edgeColor, edge);
+
     }
   `;
 
@@ -332,16 +332,18 @@ export function createSDFTexture(
   }
   
   void main() {
-    float minDist = 1000.0;
-    
+    float minDist = 10000.0;
     // Loop through all edges
     for (int i = 0; i < 336; i++) {
       if (i >= numEdges) break;
-      
+  
+
       float texCoord1 = (float(i * 2) + 0.5) / float(numEdges * 2);
-      vec4 point1 = texture2D(edgeTexture, vec2(texCoord1, 0.5));
-      
       float texCoord2 = (float(i * 2 + 1) + 0.5) / float(numEdges * 2);
+
+
+      
+      vec4 point1 = texture2D(edgeTexture, vec2(texCoord1, 0.5));      
       vec4 point2 = texture2D(edgeTexture, vec2(texCoord2, 0.5));
       
       // Calculate distance to this edge
@@ -350,10 +352,8 @@ export function createSDFTexture(
       // Store minimum absolute distance
       minDist = min(minDist, abs(dist));
     }
-    
-    // Store distance in the red channel, normalized to a reasonable range
-    // This improves visibility and makes edge width adjustment more intuitive
-    gl_FragColor = vec4(minDist,0.0,0., 1.0);
+
+    gl_FragColor = vec4(minDist, 0., 0.0, 1.0);
   }
 `;
 
@@ -377,15 +377,18 @@ export function createSDFTexture(
     "sdfTexture",
     1024, // Size
     scene,
-    true, // No mipmaps
+    false, // No mipmaps
     true, // Use depth buffer
     Constants.TEXTURETYPE_FLOAT,
     false,
     Engine.TEXTURE_NEAREST_SAMPLINGMODE
   );
 
-  // renderTarget.clearColor = new Color4(1, 1, 1, 1);
-  // renderTarget.samples = 16;
+  renderTarget.clearColor = new Color4(0, 0, 1, 1);
+  // renderTarget.samples = 4;
+  renderTarget.wrapU = Texture.CLAMP_ADDRESSMODE;
+  renderTarget.wrapV = Texture.CLAMP_ADDRESSMODE;
+  // renderTarget.anisotropicFilteringLevel = 1;
 
   // Set up an orthographic camera specifically for rendering the SDF
   const sdfCamera = new ArcRotateCamera(
@@ -480,67 +483,135 @@ export function createLookupShader(
   uniform sampler2D sdfTexture;
   uniform float edgeWidth;
   uniform vec3 edgeColor;
+
   
   void main() {
-    // vec2 delta = vec2(0.2);
-    // vec2 vvUV = vUV * (vec2(1.) - delta) + delta/2.;
 
-    vec2 texelSize = vec2(1.) / vec2(1024.);
-
-    // float rD = texture2D(sdfTexture, vUV + vec2(texelSize.x, 0.));
-    // float lD = texture2D(sdfTexture, vUV - vec2(texelSize.x, 0.));
-
-    // Lookup the distance value from the SDF texture
-    float distance = texture2D(sdfTexture, vUV).r;
+   
+  float delta = 0.002;
+  vec2 texSize = vec2(1. / 1024.);
+  
 
 
-// Sample the SDF texture at 9 points around the current UV coordinate
-float tl = texture2D(sdfTexture, vUV + vec2(-texelSize.x, -texelSize.y)).r;
-float tc = texture2D(sdfTexture, vUV + vec2(0.0, -texelSize.y)).r;
-float tr = texture2D(sdfTexture, vUV + vec2(texelSize.x, -texelSize.y)).r;
-float ml = texture2D(sdfTexture, vUV + vec2(-texelSize.x, 0.0)).r;
-float mc = texture2D(sdfTexture, vUV).r;
-float mr = texture2D(sdfTexture, vUV + vec2(texelSize.x, 0.0)).r;
-float bl = texture2D(sdfTexture, vUV + vec2(-texelSize.x, texelSize.y)).r;
-float bc = texture2D(sdfTexture, vUV + vec2(0.0, texelSize.y)).r;
-float br = texture2D(sdfTexture, vUV + vec2(texelSize.x, texelSize.y)).r;
+  // Direct texel fetch without any filtering
+  vec4 edgeData = texture2D(sdfTexture, vUV);
+  
+  // Sample the encoded distance from the texture
+  float distance = edgeData.r;
 
-// Apply Sobel kernels
-// Horizontal kernel: [-1 0 1; -2 0 2; -1 0 1]
-float gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+  vec2 neighbourOffsets[4] = vec2[](
+    vec2(-1,0),
+    vec2(1,0),
+    vec2(0,-1),
+    vec2(0,1)
+  );
 
-// Vertical kernel: [-1 -2 -1; 0 0 0; 1 2 1]
-float gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
+  bool isEdge = false;
 
-// Compute gradient magnitude
-float edgeStrength = sqrt(gx * gx + gy * gy);
-
-    // Create smooth edge effect using screen-space derivatives
-    float pixelWidth = fwidth(distance);
-    
-    // Adjust the edgeWidth to deal with potential scale differences
-    float adjustedEdgeWidth = edgeWidth * 1.0; // Increase the effective width
-    
-    float edge = 1.0 - smoothstep(adjustedEdgeWidth - pixelWidth, 
-                                 adjustedEdgeWidth + pixelWidth, 
-                                 distance);
-    
-    // Output edge with transparency
-
-
-    if (edgeStrength > 1.2)
+  if (edgeData.b != 0.) 
+  {
+    vec4 mi = vec4(1.);
+    for (int i = 0; i < 4;  i++)
     {
-      gl_FragColor = vec4(vec3(1.),1.);
-    }  else {
-    gl_FragColor = vec4(edgeColor,edge);
+      vec2 sampleUV = vUV + neighbourOffsets[i] * texSize;
+      vec4 neighbourData = texture2D(sdfTexture, sampleUV);
 
+      // // If the neighbor is a blue pixel (clear color), skip it
+      if (neighbourData.b > 0.0) 
+      {
+        continue;
       }
       
+      mi = min(mi, neighbourData); 
+      
+      // // Check if neighbor is an edge (red == 0)
+      // if (neighbourData.r < 0.5 && neighbourData.g == 0.0 && neighbourData.b == 0.0) 
+      // {
+      //   isEdge = true;
+      //   edgeData = neighbourData;  
+      // }
+    }
+
+    // if (mi.r != 1.) {
+    //   edgeData = mi;
+    // }
+
+    if (mi == vec4(1.)) {
+      mi = vec4(0.,0.,0.,1.);
+    }
+
+    edgeData = mi;
+
+      if (edgeData.b > 0.) {
+        edgeData = vec4(0.0,0.0,0.0,1.0);
+      }
     
+    // if (isEdge) 
+    // {
+    //   edgeData = mi; // Black for edges
+    // } 
+    // else 
+    // {
+    //   edgeData = vec4(1.0, 0.0,0.0,1.0); // Red for non-edges
+    // }
 
 
-    //  gl_FragColor = vec4(abs(gx * 0.1), abs(gy*0.1), 0.,1.);
+  }
+
+   vec2 uvGradient = fwidth(vec2(edgeData.r));
+  float gradientMagnitude = max(uvGradient.x, uvGradient.y);
+
+
+  // Decode the distance (reverse the encoding)
+  // float distance = -log(1.0 - clamp(encodedDistance, 0.0, 0.999)) / 20.0;
+
+  // if (distance < 0.3 && distance > 0.) {
+  // gl_FragColor = vec4(1., 0.,0.,1.);
+  // } else {
+  //  gl_FragColor = vec4(1.);
+  //  }
+
+   gl_FragColor = vec4(distance, 0.,0.,1.);
+  
+    // Create smooth edge effect using screen-space derivatives
+      float pixelWidth = fwidth(distance);
+      float edge = 1.0 - smoothstep(
+      edgeWidth, 
+      edgeWidth + 0.08, 
+      distance
+    );
+
+    //  if (edgeData.b > 0.) { 
+    //  // check neighbours
+    //   edge = 0.;
+    // } 
+      
+      // Output edge with transparency
+      gl_FragColor = vec4(edgeColor, edge);
+  // // Output edge with transparency
+  //  gl_FragColor = vec4( vec3(edgeData),1.);
+  // // Check if we're at a seam
+
+
+  
+
+  //     vec2 pixelSize = vec2(1.0/4096.0, 1.0/4096.0); // Adjust to your texture size
+  //   vec4 rightPixel = texture2D(sdfTexture, vUV - vec2(pixelSize.x, 0.0));
     
+  //   // Visualize difference
+  //   float diff = length(edgeData.rgb - rightPixel.rgb);
+  //   if (diff > 0.2) { // This indicates an edge/seam
+  //       gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); // Mark edges as red
+  //   } else {
+  //       gl_FragColor = vec4(0.,0.,0., 1.0);
+  //   }
+  
+    //  gl_FragColor = vec4(distance(edgeData, vec4(0.,0.,1.,1.)), 0.,0.,1.);
+    // if (edgeData.b != 0. && gradientMagnitude <  0.1) {
+    // gl_FragColor = vec4(1.,1.,0.,1.);  
+    // }else {
+    gl_FragColor = vec4(edgeData);
+    //  }
   }
 `;
 
@@ -565,6 +636,7 @@ float edgeStrength = sqrt(gx * gx + gy * gy);
       samplers: ["sdfTexture"],
     }
   );
+
   shader.setTexture("sdfTexture", sdfTexture);
   shader.setFloat("edgeWidth", edgeWidth);
   shader.setVector3("edgeColor", edgeColor);
@@ -687,3 +759,7 @@ export function setupEdgeRendering(
     edgeTexture,
   };
 }
+
+// Notes:
+// for seams:
+//

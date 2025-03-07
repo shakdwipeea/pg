@@ -12,6 +12,8 @@ import {
   Color3,
   Tools,
   Constants,
+  DeviceSourceManager,
+  DeviceType,
 } from "@babylonjs/core";
 import { loadMesh, setupEdgeRendering, EdgeRenderingOptions } from "./sdf";
 import { AdvancedDynamicTexture } from "@babylonjs/gui/2D/advancedDynamicTexture";
