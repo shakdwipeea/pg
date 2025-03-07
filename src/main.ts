@@ -83,15 +83,15 @@ class App {
     this.camera.minZ = 0.1;
 
     // Setup lighting
-    this.light = new HemisphericLight(
-      "light1",
-      new Vector3(0, 1, 0),
-      this.scene
-    );
-    this.light.intensity = 0.7;
+    // this.light = new HemisphericLight(
+    //   "light1",
+    //   new Vector3(0, 1, 0),
+    //   this.scene
+    // );
+    // this.light.intensity = 1.0;
 
     // Set scene clearing color
-    this.scene.clearColor = new Color3(0.05, 0.05, 0.05);
+    this.scene.clearColor = new Color3(0.0, 0.0, 0.0);
   }
 
   private setupMesh(): void {

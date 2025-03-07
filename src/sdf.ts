@@ -15,6 +15,7 @@ import {
   Constants,
   VertexBuffer,
   Color4,
+  PassPostProcess,
 } from "@babylonjs/core";
 import meshData from "./mesh.json?raw";
 import edge from "./edges.json?raw";
@@ -375,7 +376,7 @@ export function createSDFTexture(
   // Create a render target texture
   const renderTarget = new RenderTargetTexture(
     "sdfTexture",
-    1024, // Size
+    4096, // Size
     scene,
     false, // No mipmaps
     true, // Use depth buffer
@@ -385,7 +386,7 @@ export function createSDFTexture(
   );
 
   renderTarget.clearColor = new Color4(0, 0, 1, 1);
-  // renderTarget.samples = 4;
+  renderTarget.samples = 4;
   renderTarget.wrapU = Texture.CLAMP_ADDRESSMODE;
   renderTarget.wrapV = Texture.CLAMP_ADDRESSMODE;
   // renderTarget.anisotropicFilteringLevel = 1;
@@ -484,15 +485,33 @@ export function createLookupShader(
   uniform float edgeWidth;
   uniform vec3 edgeColor;
 
+
+  vec4 fixDiscontinuities(sampler2D tex, vec2 uv1, vec2 uv2) {
+    // Sample current pixel and inner pixel
+    vec4 edgeColor = texture(tex, uv1);
+    vec4 innerColor = texture(tex, uv2);
+    
+    vec3 slope = edgeColor.rgb - innerColor.rgb;
+    vec3 finalColor = edgeColor.rgb + slope * 4.0;
+   
+    // Calculate difference in red channel (distance field)
+    float rDiff = edgeColor.r - innerColor.r;
+    
+    // If we detect a significant jump in the distance field (red channel)
+    // AND we're in a blue channel area (outside/clear area)
+    if ((rDiff > 0.15 || edgeColor.b > 0.01) && edgeColor.r > 0.2) {
+        // Force red to 1.0 to eliminate partial values at seams
+        return vec4(edgeColor.r, 0.0, 0., 1.0);
+    }
+    
+    return edgeColor;
+}
   
   void main() {
-
-   
-  float delta = 0.002;
-  vec2 texSize = vec2(1. / 1024.);
   
-
-
+  float delta = 0.002;
+  vec2 texSize = vec2(1. / 4096.);
+  
   // Direct texel fetch without any filtering
   vec4 edgeData = texture2D(sdfTexture, vUV);
   
@@ -507,111 +526,61 @@ export function createLookupShader(
   );
 
   bool isEdge = false;
+  float discontinuityThreshold = 0.1;
 
   if (edgeData.b != 0.) 
   {
-    vec4 mi = vec4(1.);
+    vec4 ma = vec4(0.);
+    vec2 minUVOffset = vec2(-1.);
+
     for (int i = 0; i < 4;  i++)
     {
       vec2 sampleUV = vUV + neighbourOffsets[i] * texSize;
       vec4 neighbourData = texture2D(sdfTexture, sampleUV);
 
-      // // If the neighbor is a blue pixel (clear color), skip it
-      if (neighbourData.b > 0.0) 
+      if (neighbourData.b > 0.1) 
       {
         continue;
       }
-      
-      mi = min(mi, neighbourData); 
-      
-      // // Check if neighbor is an edge (red == 0)
-      // if (neighbourData.r < 0.5 && neighbourData.g == 0.0 && neighbourData.b == 0.0) 
-      // {
-      //   isEdge = true;
-      //   edgeData = neighbourData;  
-      // }
+
+      if (neighbourData.r > ma.r)
+      {
+        ma = neighbourData;
+        minUVOffset = neighbourOffsets[i];
+      }      
     }
 
-    // if (mi.r != 1.) {
-    //   edgeData = mi;
-    // }
-
-    if (mi == vec4(1.)) {
-      mi = vec4(0.,0.,0.,1.);
-    }
-
-    edgeData = mi;
-
-      if (edgeData.b > 0.) {
-        edgeData = vec4(0.0,0.0,0.0,1.0);
-      }
     
-    // if (isEdge) 
-    // {
-    //   edgeData = mi; // Black for edges
-    // } 
-    // else 
-    // {
-    //   edgeData = vec4(1.0, 0.0,0.0,1.0); // Red for non-edges
-    // }
+    vec4 finalColor = fixDiscontinuities(
+      sdfTexture, 
+      vUV + minUVOffset * texSize,
+      vUV + minUVOffset * texSize * 0.25
+    );
 
+    edgeData = finalColor;
+
+    vec2 sam = vUV + minUVOffset * texSize;
+    if (finalColor.b > 0.0) 
+    {
+      vec4 finalColor1 = fixDiscontinuities(
+        sdfTexture, 
+        vUV + minUVOffset * texSize * 0.25,
+        vUV + minUVOffset * texSize * 0.75
+      );
+
+    
+      edgeData = vec4(finalColor1.r, 0.,0.,1.);   
+    }
 
   }
 
-   vec2 uvGradient = fwidth(vec2(edgeData.r));
-  float gradientMagnitude = max(uvGradient.x, uvGradient.y);
-
-
-  // Decode the distance (reverse the encoding)
-  // float distance = -log(1.0 - clamp(encodedDistance, 0.0, 0.999)) / 20.0;
-
-  // if (distance < 0.3 && distance > 0.) {
-  // gl_FragColor = vec4(1., 0.,0.,1.);
-  // } else {
-  //  gl_FragColor = vec4(1.);
-  //  }
-
-   gl_FragColor = vec4(distance, 0.,0.,1.);
   
-    // Create smooth edge effect using screen-space derivatives
-      float pixelWidth = fwidth(distance);
-      float edge = 1.0 - smoothstep(
-      edgeWidth, 
-      edgeWidth + 0.08, 
-      distance
-    );
-
-    //  if (edgeData.b > 0.) { 
-    //  // check neighbours
-    //   edge = 0.;
-    // } 
-      
-      // Output edge with transparency
-      gl_FragColor = vec4(edgeColor, edge);
-  // // Output edge with transparency
-  //  gl_FragColor = vec4( vec3(edgeData),1.);
-  // // Check if we're at a seam
-
-
-  
-
-  //     vec2 pixelSize = vec2(1.0/4096.0, 1.0/4096.0); // Adjust to your texture size
-  //   vec4 rightPixel = texture2D(sdfTexture, vUV - vec2(pixelSize.x, 0.0));
-    
-  //   // Visualize difference
-  //   float diff = length(edgeData.rgb - rightPixel.rgb);
-  //   if (diff > 0.2) { // This indicates an edge/seam
-  //       gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); // Mark edges as red
-  //   } else {
-  //       gl_FragColor = vec4(0.,0.,0., 1.0);
-  //   }
-  
-    //  gl_FragColor = vec4(distance(edgeData, vec4(0.,0.,1.,1.)), 0.,0.,1.);
-    // if (edgeData.b != 0. && gradientMagnitude <  0.1) {
-    // gl_FragColor = vec4(1.,1.,0.,1.);  
-    // }else {
-    gl_FragColor = vec4(edgeData);
-    //  }
+    distance = edgeData.r;
+  // Calculate a pixel-perfect antialiasing edge
+  float aa = length(vec2(dFdx(distance), dFdy(distance))) * 0.5;
+  // Apply the antialiased edge
+  float smoothTransition = smoothstep(0.3 - aa, 0.3 + aa, distance);
+  gl_FragColor = mix(vec4(1.,0.,0.,1.), vec4(1.), smoothTransition);
   }
 `;
 
@@ -640,7 +609,6 @@ export function createLookupShader(
   shader.setTexture("sdfTexture", sdfTexture);
   shader.setFloat("edgeWidth", edgeWidth);
   shader.setVector3("edgeColor", edgeColor);
-  shader.alphaMode = Constants.ALPHA_COMBINE;
 
   return shader;
 }
@@ -751,6 +719,13 @@ export function setupEdgeRendering(
   } else {
     mesh.material = lookupShader;
   }
+
+  new PassPostProcess(
+    "asas",
+    1,
+    scene.activeCamera,
+    Engine.TEXTURE_NEAREST_SAMPLINGMODE
+  );
 
   return {
     directEdgeShader,
